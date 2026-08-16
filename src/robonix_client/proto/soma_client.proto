@@ -7,6 +7,19 @@ message UrdfAsset {
   bytes data = 2;
 }
 
+message UrdfAssetMetadata {
+  string path = 1;
+  uint64 size_bytes = 2;
+  string sha256 = 3;
+  string media_type = 4;
+}
+
+message UrdfAssetChunk {
+  string path = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
 message GetUrdf_Request {
   string robot_id = 1;
   bool include_assets = 2;
@@ -16,6 +29,25 @@ message GetUrdf_Response {
   string robot_id = 1;
   string urdf_xml = 2;
   repeated UrdfAsset assets = 3;
+}
+
+message GetUrdfAssetManifest_Request {
+  string robot_id = 1;
+}
+
+message GetUrdfAssetManifest_Response {
+  string robot_id = 1;
+  string urdf_xml = 2;
+  string resource_set_id = 3;
+  uint64 total_size_bytes = 4;
+  repeated UrdfAssetMetadata assets = 5;
+}
+
+message StreamUrdfAsset_Request {
+  string robot_id = 1;
+  string path = 2;
+  uint64 offset = 3;
+  uint32 chunk_size = 4;
 }
 
 message GetYaml_Request {

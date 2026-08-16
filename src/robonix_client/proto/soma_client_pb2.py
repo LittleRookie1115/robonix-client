@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11soma_client.proto\x12\x13robonix.client.soma\"\'\n\tUrdfAsset\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\";\n\x0fGetUrdf_Request\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x16\n\x0einclude_assets\x18\x02 \x01(\x08\"f\n\x10GetUrdf_Response\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x10\n\x08urdf_xml\x18\x02 \x01(\t\x12.\n\x06\x61ssets\x18\x03 \x03(\x0b\x32\x1e.robonix.client.soma.UrdfAsset\"#\n\x0fGetYaml_Request\x12\x10\n\x08robot_id\x18\x01 \x01(\t\"7\n\x10GetYaml_Response\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x11\n\tyaml_text\x18\x02 \x01(\tb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x11soma_client.proto\x12\x13robonix.client.soma\"\'\n\tUrdfAsset\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\"Y\n\x11UrdfAssetMetadata\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x12\n\nsize_bytes\x18\x02 \x01(\x04\x12\x0e\n\x06sha256\x18\x03 \x01(\t\x12\x12\n\nmedia_type\x18\x04 \x01(\t\"<\n\x0eUrdfAssetChunk\x12\x0c\n\x04path\x18\x01 \x01(\t\x12\x0e\n\x06offset\x18\x02 \x01(\x04\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\";\n\x0fGetUrdf_Request\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x16\n\x0einclude_assets\x18\x02 \x01(\x08\"f\n\x10GetUrdf_Response\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x10\n\x08urdf_xml\x18\x02 \x01(\t\x12.\n\x06\x61ssets\x18\x03 \x03(\x0b\x32\x1e.robonix.client.soma.UrdfAsset\"0\n\x1cGetUrdfAssetManifest_Request\x12\x10\n\x08robot_id\x18\x01 \x01(\t\"\xae\x01\n\x1dGetUrdfAssetManifest_Response\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x10\n\x08urdf_xml\x18\x02 \x01(\t\x12\x17\n\x0fresource_set_id\x18\x03 \x01(\t\x12\x18\n\x10total_size_bytes\x18\x04 \x01(\x04\x12\x36\n\x06\x61ssets\x18\x05 \x03(\x0b\x32&.robonix.client.soma.UrdfAssetMetadata\"]\n\x17StreamUrdfAsset_Request\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x0c\n\x04path\x18\x02 \x01(\t\x12\x0e\n\x06offset\x18\x03 \x01(\x04\x12\x12\n\nchunk_size\x18\x04 \x01(\r\"#\n\x0fGetYaml_Request\x12\x10\n\x08robot_id\x18\x01 \x01(\t\"7\n\x10GetYaml_Response\x12\x10\n\x08robot_id\x18\x01 \x01(\t\x12\x11\n\tyaml_text\x18\x02 \x01(\tb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,12 +33,22 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_URDFASSET']._serialized_start=42
   _globals['_URDFASSET']._serialized_end=81
-  _globals['_GETURDF_REQUEST']._serialized_start=83
-  _globals['_GETURDF_REQUEST']._serialized_end=142
-  _globals['_GETURDF_RESPONSE']._serialized_start=144
-  _globals['_GETURDF_RESPONSE']._serialized_end=246
-  _globals['_GETYAML_REQUEST']._serialized_start=248
-  _globals['_GETYAML_REQUEST']._serialized_end=283
-  _globals['_GETYAML_RESPONSE']._serialized_start=285
-  _globals['_GETYAML_RESPONSE']._serialized_end=340
+  _globals['_URDFASSETMETADATA']._serialized_start=83
+  _globals['_URDFASSETMETADATA']._serialized_end=172
+  _globals['_URDFASSETCHUNK']._serialized_start=174
+  _globals['_URDFASSETCHUNK']._serialized_end=234
+  _globals['_GETURDF_REQUEST']._serialized_start=236
+  _globals['_GETURDF_REQUEST']._serialized_end=295
+  _globals['_GETURDF_RESPONSE']._serialized_start=297
+  _globals['_GETURDF_RESPONSE']._serialized_end=399
+  _globals['_GETURDFASSETMANIFEST_REQUEST']._serialized_start=401
+  _globals['_GETURDFASSETMANIFEST_REQUEST']._serialized_end=449
+  _globals['_GETURDFASSETMANIFEST_RESPONSE']._serialized_start=452
+  _globals['_GETURDFASSETMANIFEST_RESPONSE']._serialized_end=626
+  _globals['_STREAMURDFASSET_REQUEST']._serialized_start=628
+  _globals['_STREAMURDFASSET_REQUEST']._serialized_end=721
+  _globals['_GETYAML_REQUEST']._serialized_start=723
+  _globals['_GETYAML_REQUEST']._serialized_end=758
+  _globals['_GETYAML_RESPONSE']._serialized_start=760
+  _globals['_GETYAML_RESPONSE']._serialized_end=815
 # @@protoc_insertion_point(module_scope)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import suppress
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 import grpc
@@ -15,15 +17,26 @@ from .transport import (
     grpc_channel,
     system_snapshot,
 )
-from .urdf_assets import urdf_asset_store
+from .urdf_assets import UrdfAssetMetadata, urdf_asset_store
 
 CONTRACT_SOMA_GET_YAML = "robonix/system/soma/get_yaml"
 CONTRACT_SOMA_GET_URDF = "robonix/system/soma/get_urdf"
+CONTRACT_SOMA_GET_URDF_ASSET_MANIFEST = (
+    "robonix/system/soma/get_urdf_asset_manifest"
+)
+CONTRACT_SOMA_STREAM_URDF_ASSET = "robonix/system/soma/stream_urdf_asset"
 CONTRACT_VITALS_STREAM = "robonix/system/vitals/stream"
 CONTRACT_VITALS_MODULES_GET = "robonix/system/vitals/modules/get"
 
 SOMA_GET_YAML_PATH = "/robonix.contracts.RobonixSystemSomaGetYaml/GetYaml"
 SOMA_GET_URDF_PATH = "/robonix.contracts.RobonixSystemSomaGetUrdf/GetUrdf"
+SOMA_GET_URDF_ASSET_MANIFEST_PATH = (
+    "/robonix.contracts.RobonixSystemSomaGetUrdfAssetManifest/GetUrdfAssetManifest"
+)
+SOMA_STREAM_URDF_ASSET_PATH = (
+    "/robonix.contracts.RobonixSystemSomaStreamUrdfAsset/StreamUrdfAsset"
+)
+URDF_ASSET_CHUNK_BYTES = 1024 * 1024
 VITALS_STREAM_PATH = "/robonix.contracts.RobonixSystemVitalsStream/StreamVitals"
 VITALS_MODULES_GET_PATH = (
     "/robonix.contracts.RobonixSystemVitalsModulesGet/GetModuleHealthSnapshot"
@@ -230,28 +243,57 @@ async def load_robot_description(settings: ClientSettings) -> dict[str, Any]:
     urdf_xml = ""
     urdf_asset_base_url = ""
     try:
-        urdf_endpoint = await discover_endpoint(
-            settings.atlas_endpoint, CONTRACT_SOMA_GET_URDF
+        manifest_endpoint = await discover_endpoint(
+            settings.atlas_endpoint, CONTRACT_SOMA_GET_URDF_ASSET_MANIFEST
         )
-        urdf_response = await _unary_unary(
-            urdf_endpoint,
-            SOMA_GET_URDF_PATH,
-            soma_client_pb2.GetUrdf_Request(
-                robot_id=yaml_response.robot_id,
-                include_assets=True,
+        manifest = await _unary_unary(
+            manifest_endpoint,
+            SOMA_GET_URDF_ASSET_MANIFEST_PATH,
+            soma_client_pb2.GetUrdfAssetManifest_Request(
+                robot_id=yaml_response.robot_id
             ),
-            soma_client_pb2.GetUrdf_Response,
+            soma_client_pb2.GetUrdfAssetManifest_Response,
         )
-        urdf_xml = urdf_response.urdf_xml
-        resource_set_id = urdf_asset_store.put(
-            (asset.path, asset.data) for asset in urdf_response.assets
+        urdf_xml = manifest.urdf_xml
+        if sum(int(asset.size_bytes) for asset in manifest.assets) != int(
+            manifest.total_size_bytes
+        ):
+            raise ValueError("Soma URDF asset manifest has an invalid total size")
+        download_asset = None
+        if manifest.assets:
+            stream_endpoint = await discover_endpoint(
+                settings.atlas_endpoint, CONTRACT_SOMA_STREAM_URDF_ASSET
+            )
+
+            async def download_asset(path: str, destination: Path) -> None:
+                await _download_urdf_asset(
+                    stream_endpoint,
+                    yaml_response.robot_id,
+                    path,
+                    destination,
+                )
+
+        resource_set_id = urdf_asset_store.register(
+            manifest.resource_set_id,
+            (
+                UrdfAssetMetadata(
+                    path=asset.path,
+                    size_bytes=int(asset.size_bytes),
+                    sha256=asset.sha256,
+                    media_type=asset.media_type,
+                )
+                for asset in manifest.assets
+            ),
+            download_asset,
         )
-        if resource_set_id:
+        if manifest.assets:
             urdf_asset_base_url = (
                 f"/api/vitals/urdf-assets/{resource_set_id}/"
             )
     except (grpc.aio.AioRpcError, RuntimeError):
-        pass
+        urdf_xml, urdf_asset_base_url = await _load_legacy_urdf(
+            settings, yaml_response.robot_id
+        )
 
     description = normalize_robot_description(
         yaml_response.yaml_text,
@@ -260,6 +302,68 @@ async def load_robot_description(settings: ClientSettings) -> dict[str, Any]:
         urdf_asset_base_url,
     )
     return description
+
+
+async def _download_urdf_asset(
+    endpoint: str,
+    robot_id: str,
+    path: str,
+    destination: Path,
+) -> None:
+    """Stream one Soma resource into a temporary cache file."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    expected_offset = 0
+    async with grpc_channel(endpoint) as channel:
+        call = channel.unary_stream(
+            SOMA_STREAM_URDF_ASSET_PATH,
+            request_serializer=soma_client_pb2.StreamUrdfAsset_Request.SerializeToString,
+            response_deserializer=soma_client_pb2.UrdfAssetChunk.FromString,
+        )
+        with destination.open("wb") as output:
+            async for chunk in call(
+                soma_client_pb2.StreamUrdfAsset_Request(
+                    robot_id=robot_id,
+                    path=path,
+                    chunk_size=URDF_ASSET_CHUNK_BYTES,
+                )
+            ):
+                if chunk.path != path or int(chunk.offset) != expected_offset:
+                    raise RuntimeError(f"invalid URDF asset stream position for '{path}'")
+                output.write(chunk.data)
+                expected_offset += len(chunk.data)
+            output.flush()
+            os.fsync(output.fileno())
+
+
+async def _load_legacy_urdf(
+    settings: ClientSettings,
+    robot_id: str,
+) -> tuple[str, str]:
+    """Use the bounded inline response exposed by older Soma versions."""
+    try:
+        urdf_endpoint = await discover_endpoint(
+            settings.atlas_endpoint, CONTRACT_SOMA_GET_URDF
+        )
+        urdf_response = await _unary_unary(
+            urdf_endpoint,
+            SOMA_GET_URDF_PATH,
+            soma_client_pb2.GetUrdf_Request(
+                robot_id=robot_id,
+                include_assets=True,
+            ),
+            soma_client_pb2.GetUrdf_Response,
+        )
+        resource_set_id = urdf_asset_store.put(
+            (asset.path, asset.data) for asset in urdf_response.assets
+        )
+        base_url = (
+            f"/api/vitals/urdf-assets/{resource_set_id}/"
+            if resource_set_id
+            else ""
+        )
+        return urdf_response.urdf_xml, base_url
+    except (grpc.aio.AioRpcError, RuntimeError):
+        return "", ""
 
 
 def _matches_component(signal_key: str, component_id: str) -> bool:

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import unittest
 from contextlib import suppress
 from unittest.mock import AsyncMock, patch
@@ -227,6 +228,26 @@ class WireCompatibilityTest(unittest.TestCase):
         )
         self.assertEqual(asset_fields, [("path", 1), ("data", 2)])
 
+        manifest_fields = [
+            (field.name, field.number)
+            for field in soma_client_pb2.GetUrdfAssetManifest_Response.DESCRIPTOR.fields
+        ]
+        chunk_fields = [
+            (field.name, field.number)
+            for field in soma_client_pb2.UrdfAssetChunk.DESCRIPTOR.fields
+        ]
+        self.assertEqual(
+            manifest_fields,
+            [
+                ("robot_id", 1),
+                ("urdf_xml", 2),
+                ("resource_set_id", 3),
+                ("total_size_bytes", 4),
+                ("assets", 5),
+            ],
+        )
+        self.assertEqual(chunk_fields, [("path", 1), ("offset", 2), ("data", 3)])
+
 
 class RobotDescriptionTest(unittest.TestCase):
     def test_normalizes_recursive_soma_components(self):
@@ -260,7 +281,105 @@ class RobotDescriptionTest(unittest.TestCase):
 
 
 class RobotDescriptionLoadTest(unittest.IsolatedAsyncioTestCase):
-    async def test_get_urdf_requests_and_stages_attached_assets(self):
+    async def test_get_urdf_registers_streamed_assets_without_downloading(self):
+        asset_data = b"solid base"
+        asset_hash = hashlib.sha256(asset_data).hexdigest()
+        path_bytes = b"meshes/base.stl"
+        digest = hashlib.sha256()
+        digest.update(len(path_bytes).to_bytes(8, "big"))
+        digest.update(path_bytes)
+        digest.update(len(asset_data).to_bytes(8, "big"))
+        digest.update(asset_hash.encode("ascii"))
+        responses = [
+            soma_client_pb2.GetYaml_Response(
+                robot_id="test_robot",
+                yaml_text=SOMA_YAML,
+            ),
+            soma_client_pb2.GetUrdfAssetManifest_Response(
+                robot_id="test_robot",
+                urdf_xml=(
+                    "<robot><link name=\"base\"><visual><geometry>"
+                    "<mesh filename=\"meshes/base.stl\"/>"
+                    "</geometry></visual></link></robot>"
+                ),
+                resource_set_id=digest.hexdigest(),
+                total_size_bytes=len(asset_data),
+                assets=[
+                    soma_client_pb2.UrdfAssetMetadata(
+                        path="meshes/base.stl",
+                        size_bytes=len(asset_data),
+                        sha256=asset_hash,
+                        media_type="model/stl",
+                    )
+                ],
+            ),
+        ]
+        with (
+            patch(
+                "robonix_client.vitals_transport.discover_endpoint",
+                AsyncMock(
+                    side_effect=[
+                        "127.0.0.1:50092",
+                        "127.0.0.1:50092",
+                        "127.0.0.1:50092",
+                    ]
+                ),
+            ),
+            patch(
+                "robonix_client.vitals_transport._unary_unary",
+                AsyncMock(side_effect=responses),
+            ) as unary,
+        ):
+            description = await load_robot_description(ClientSettings())
+
+        request = unary.await_args_list[1].args[2]
+        self.assertEqual(request.robot_id, "test_robot")
+        self.assertIsInstance(
+            request, soma_client_pb2.GetUrdfAssetManifest_Request
+        )
+        self.assertRegex(
+            description["urdfAssetBaseUrl"],
+            r"^/api/vitals/urdf-assets/[0-9a-f]{64}/$",
+        )
+        self.assertEqual(description["render"]["mode"], "urdf")
+
+    async def test_manifest_without_assets_remains_compatible(self):
+        responses = [
+            soma_client_pb2.GetYaml_Response(
+                robot_id="test_robot",
+                yaml_text=SOMA_YAML,
+            ),
+            soma_client_pb2.GetUrdfAssetManifest_Response(
+                robot_id="test_robot",
+                urdf_xml=(
+                    "<robot><link name=\"base\"><visual><geometry>"
+                    "<box size=\"1 1 1\"/>"
+                    "</geometry></visual></link></robot>"
+                ),
+                resource_set_id=hashlib.sha256().hexdigest(),
+            ),
+        ]
+        with (
+            patch(
+                "robonix_client.vitals_transport.discover_endpoint",
+                AsyncMock(
+                    side_effect=[
+                        "127.0.0.1:50092",
+                        "127.0.0.1:50092",
+                    ]
+                ),
+            ),
+            patch(
+                "robonix_client.vitals_transport._unary_unary",
+                AsyncMock(side_effect=responses),
+            ),
+        ):
+            description = await load_robot_description(ClientSettings())
+
+        self.assertEqual(description["urdfAssetBaseUrl"], "")
+        self.assertEqual(description["render"]["mode"], "urdf")
+
+    async def test_falls_back_to_legacy_inline_urdf(self):
         responses = [
             soma_client_pb2.GetYaml_Response(
                 robot_id="test_robot",
@@ -268,11 +387,7 @@ class RobotDescriptionLoadTest(unittest.IsolatedAsyncioTestCase):
             ),
             soma_client_pb2.GetUrdf_Response(
                 robot_id="test_robot",
-                urdf_xml=(
-                    "<robot><link name=\"base\"><visual><geometry>"
-                    "<mesh filename=\"meshes/base.stl\"/>"
-                    "</geometry></visual></link></robot>"
-                ),
+                urdf_xml="<robot><link name='base'><visual/></link></robot>",
                 assets=[
                     soma_client_pb2.UrdfAsset(
                         path="meshes/base.stl",
@@ -284,7 +399,13 @@ class RobotDescriptionLoadTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch(
                 "robonix_client.vitals_transport.discover_endpoint",
-                AsyncMock(side_effect=["127.0.0.1:50092", "127.0.0.1:50092"]),
+                AsyncMock(
+                    side_effect=[
+                        "127.0.0.1:50092",
+                        RuntimeError("manifest unavailable"),
+                        "127.0.0.1:50092",
+                    ]
+                ),
             ),
             patch(
                 "robonix_client.vitals_transport._unary_unary",
@@ -294,43 +415,12 @@ class RobotDescriptionLoadTest(unittest.IsolatedAsyncioTestCase):
             description = await load_robot_description(ClientSettings())
 
         request = unary.await_args_list[1].args[2]
-        self.assertEqual(request.robot_id, "test_robot")
+        self.assertIsInstance(request, soma_client_pb2.GetUrdf_Request)
         self.assertTrue(request.include_assets)
         self.assertRegex(
             description["urdfAssetBaseUrl"],
             r"^/api/vitals/urdf-assets/[0-9a-f]{64}/$",
         )
-        self.assertEqual(description["render"]["mode"], "urdf")
-
-    async def test_get_urdf_without_assets_remains_compatible(self):
-        responses = [
-            soma_client_pb2.GetYaml_Response(
-                robot_id="test_robot",
-                yaml_text=SOMA_YAML,
-            ),
-            soma_client_pb2.GetUrdf_Response(
-                robot_id="test_robot",
-                urdf_xml=(
-                    "<robot><link name=\"base\"><visual><geometry>"
-                    "<box size=\"1 1 1\"/>"
-                    "</geometry></visual></link></robot>"
-                ),
-            ),
-        ]
-        with (
-            patch(
-                "robonix_client.vitals_transport.discover_endpoint",
-                AsyncMock(side_effect=["127.0.0.1:50092", "127.0.0.1:50092"]),
-            ),
-            patch(
-                "robonix_client.vitals_transport._unary_unary",
-                AsyncMock(side_effect=responses),
-            ),
-        ):
-            description = await load_robot_description(ClientSettings())
-
-        self.assertEqual(description["urdfAssetBaseUrl"], "")
-        self.assertEqual(description["render"]["mode"], "urdf")
 
 
 class ComponentHealthTest(unittest.TestCase):

@@ -4,14 +4,14 @@ import grpc
 from fastapi import (
     APIRouter,
     HTTPException,
-    Response,
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .transport import ClientSettings
-from .urdf_assets import urdf_asset_store
+from .urdf_assets import AssetDownloadError, urdf_asset_store
 from .vitals_alerts import (
     AlertStillActiveError,
     VitalsAlertTracker,
@@ -27,18 +27,21 @@ class ResolveAlertRequest(BaseModel):
 
 
 @router.get("/api/vitals/urdf-assets/{resource_set_id}/{asset_path:path}")
-async def urdf_asset(resource_set_id: str, asset_path: str) -> Response:
-    """Serve one immutable resource that arrived with a Soma URDF."""
+async def urdf_asset(resource_set_id: str, asset_path: str) -> FileResponse:
+    """Materialize one immutable Soma resource and serve it from disk."""
     try:
-        asset = urdf_asset_store.get(resource_set_id, asset_path)
+        asset = await urdf_asset_store.get_or_fetch(resource_set_id, asset_path)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="URDF asset not found") from exc
-    return Response(
-        content=asset.data,
+    except (AssetDownloadError, OSError, grpc.aio.AioRpcError) as exc:
+        raise HTTPException(status_code=502, detail="URDF asset download failed") from exc
+    return FileResponse(
+        path=asset.path,
         media_type=asset.media_type,
         headers={
             "Cache-Control": "public, max-age=31536000, immutable",
             "X-Content-Type-Options": "nosniff",
+            "ETag": f'"{asset.sha256}"',
         },
     )
 
