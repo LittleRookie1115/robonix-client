@@ -79,6 +79,45 @@ desktop's PipeWire, PulseAudio, or ALSA devices through PortAudio. In the UI:
 6. Open **Vitals** to inspect the Soma-derived robot model, hardware signals,
    module reports, and Atlas providers.
 
+### Large robot models
+
+Vitals gets the URDF resource manifest from Soma, then downloads each Mesh or
+texture only when the browser requests its same-origin asset URL. Files are
+streamed in bounded gRPC messages, verified by size and SHA-256, and kept in a
+content-addressed disk cache. Older Soma deployments remain supported through
+the bounded inline `get_urdf` response.
+
+The default cache directory is
+`$XDG_CACHE_HOME/robonix-client/urdf-assets`, or
+`~/.cache/robonix-client/urdf-assets` when `XDG_CACHE_HOME` is unset. Configure
+capacity before starting `robonix-client`:
+
+| Environment variable | Default | Purpose |
+|---|---:|---|
+| `ROBONIX_CLIENT_MODEL_CACHE_DIR` | platform cache directory | Persistent model cache location. |
+| `ROBONIX_CLIENT_MODEL_FILE_MAX_BYTES` | 1 GiB | Maximum size of one Mesh or texture. |
+| `ROBONIX_CLIENT_MODEL_TOTAL_MAX_BYTES` | 4 GiB | Maximum total size of one robot model. |
+| `ROBONIX_CLIENT_MODEL_CACHE_MAX_BYTES` | 8 GiB | Maximum disk cache size; must fit the active model. |
+| `ROBONIX_CLIENT_MODEL_DOWNLOAD_CONCURRENCY` | 4 | Maximum simultaneous resource downloads. |
+
+For example, to permit a 12 GiB model with resources up to 3 GiB each:
+
+```bash
+export ROBONIX_CLIENT_MODEL_FILE_MAX_BYTES=$((3 * 1024 * 1024 * 1024))
+export ROBONIX_CLIENT_MODEL_TOTAL_MAX_BYTES=$((12 * 1024 * 1024 * 1024))
+export ROBONIX_CLIENT_MODEL_CACHE_MAX_BYTES=$((24 * 1024 * 1024 * 1024))
+robonix-client --robot-host 127.0.0.1
+```
+
+These limits protect the Client host; increasing them does not reduce Mesh
+geometry complexity in the browser. Large source models should still provide
+decimated visual Meshes and compressed textures while retaining full-detail
+collision or CAD data outside the Vitals rendering bundle.
+
+The complete preparation, Git threshold, external artifact, fetch, and
+Soma-to-Client streaming specification is maintained in
+`system/soma/ROBOT_MODEL_ASSETS.md` in the Robonix source repository.
+
 `--host` and `--robot-host` are different:
 
 - `--host 127.0.0.1` controls where this Web UI listens.
@@ -243,19 +282,21 @@ Pilot owns task/steer/abort semantics; Executor owns running capability calls.
 The browser opens `/ws/vitals` on the local FastAPI process. That adapter
 discovers and combines these robot-local contracts through Atlas:
 
-- `robonix/system/soma/get_yaml` and `robonix/system/soma/get_urdf` describe
-  the body and its components;
+- `robonix/system/soma/get_yaml` describes the body and its components;
+- `robonix/system/soma/get_urdf_asset_manifest` and
+  `robonix/system/soma/stream_urdf_asset` provide the URDF and its render
+  resources, with `robonix/system/soma/get_urdf` retained as a legacy fallback;
 - `robonix/system/vitals/stream` supplies hardware health and power state;
 - `robonix/system/vitals/modules/get` supplies software module health;
 - the Atlas provider snapshot supplies provider lifecycle state.
 
 The 3D view uses a model URL when the Soma description provides one, then a
 URDF with browser-renderable visual geometry, and finally a procedural renderer
-selected from robot family and component types. The current `dev-next`
-`get_urdf` contract returns only `robot_id` and `urdf_xml`; it does not attach
-mesh or texture files. A URDF whose relative resources are unavailable therefore
-falls back to the procedural renderer. The same-origin resource route remains
-available for a future contract that explicitly supplies those assets.
+selected from robot family and component types. URDF-local Mesh and texture
+requests use the Client's same-origin resource route; the route streams missing
+files from Soma into the verified disk cache before serving them to the browser.
+An unavailable resource causes the URDF loader to fall back to the procedural
+renderer.
 
 Actuators that report `torque_enabled=0` remain healthy but are presented as
 yellow `idle` components. This readiness state propagates to their parent robot
